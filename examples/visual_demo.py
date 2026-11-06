@@ -70,18 +70,20 @@ def create_dataset(name: str, n_samples: int, seed: int) -> tuple[np.ndarray, np
     raise ValueError(f"Unknown dataset: {name!r}")
 
 
-def create_models(seed: int, n_estimators: int, n_bootstraps: int) -> dict[str, Pipeline]:
-    """Use the same preprocessing for every classifier.
+def create_models(
+    seed: int,
+    n_estimators: int,
+    n_bootstraps: int,
+    sparsity_penalty: float,
+    stability_penalty: float,
+) -> dict[str, Pipeline]:
+    """Create the classifiers used in the visual comparison."""
 
-    We compare an ordinary tree, a standard random forest, an L0-only sparse
-    oblique forest, and the stability-aware version of that oblique forest.
-    """
     common_oblique_params = dict(
         n_estimators=n_estimators,
-        support_sizes=(1, 2),  # Only two features exist in this visual example.
+        support_sizes=(1, 2),
         n_directions_per_k=8,
-        max_features=None,  # Both features are available at each node.
-        sparsity_penalty=0.003,
+        max_features=None,
         min_samples_split=40,
         min_samples_leaf=10,
         min_assessment_samples=10,
@@ -90,10 +92,14 @@ def create_models(seed: int, n_estimators: int, n_bootstraps: int) -> dict[str, 
         random_state=seed,
         n_jobs=1,
     )
+
     estimators = {
         "Decision tree (CART)": DecisionTreeClassifier(
-            max_depth=5, min_samples_leaf=10, random_state=seed
+            max_depth=5,
+            min_samples_leaf=10,
+            random_state=seed,
         ),
+
         "Random forest (sklearn)": RandomForestClassifier(
             n_estimators=max(n_estimators, 30),
             max_depth=5,
@@ -101,22 +107,33 @@ def create_models(seed: int, n_estimators: int, n_bootstraps: int) -> dict[str, 
             random_state=seed,
             n_jobs=1,
         ),
-        "Sparse oblique forest (L0)": ObliqueRandomForestClassifier(
-            **common_oblique_params, stability_penalty=0.0
+
+        "Oblique forest (no penalty)": ObliqueRandomForestClassifier(
+            **common_oblique_params,
+            sparsity_penalty=0.0,
+            stability_penalty=0.0,
         ),
+
+        "Sparse oblique forest (L0)": ObliqueRandomForestClassifier(
+            **common_oblique_params,
+            sparsity_penalty=sparsity_penalty,
+            stability_penalty=0.0,
+        ),
+
         "Stability-aware oblique forest": ObliqueRandomForestClassifier(
             **common_oblique_params,
-            stability_penalty=0.007,
+            sparsity_penalty=sparsity_penalty,
+            stability_penalty=stability_penalty,
             n_bootstraps=n_bootstraps,
             stability_mode="feature",
         ),
-        "Oblique forest (no penalty)": ObliqueRandomForestClassifier(
-            **{**common_oblique_params, "sparsity_penalty": 0.0},
-            stability_penalty=0.0,
-        ),
     }
+
     return {
-        name: Pipeline([("scaler", StandardScaler()), ("classifier", estimator)])
+        name: Pipeline([
+            ("scaler", StandardScaler()),
+            ("classifier", estimator),
+        ])
         for name, estimator in estimators.items()
     }
 
@@ -158,60 +175,156 @@ def plot_probability_maps(
     X_test: np.ndarray,
     output_path: Path,
     grid_size: int,
+    dataset: str,
 ) -> None:
-    """Compare the same models on a common two-dimensional mesh."""
+    """Plot model probabilities and the true data-generating probability."""
+
     all_X = np.vstack([X_train, X_test])
-    mins = all_X.min(axis=0) - 0.7
-    maxs = all_X.max(axis=0) + 0.7
+    mins = all_X.min(axis=0) - 0.4
+    maxs = all_X.max(axis=0) + 0.4
+
     xx, yy = np.meshgrid(
         np.linspace(mins[0], maxs[0], grid_size),
         np.linspace(mins[1], maxs[1], grid_size),
     )
     mesh = np.column_stack([xx.ravel(), yy.ravel()])
 
-    fig = plt.figure(figsize=(12, 9))
-    layout = fig.add_gridspec(2, 3, width_ratios=(1, 1, 0.04), wspace=0.22, hspace=0.27)
-    axes = [fig.add_subplot(layout[i, j]) for i in range(2) for j in range(2)]
-    colorbar_ax = fig.add_subplot(layout[:, 2])
+    fig, axes = plt.subplots(
+        2, 3,
+        figsize=(15, 9),
+        sharex=True,
+        sharey=True,
+        constrained_layout=True,
+    )
+
+    axes = axes.ravel()
+    levels = np.linspace(0, 1, 21)
+    contour = None
+
     for ax, (name, pipeline) in zip(axes, models.items()):
         proba = pipeline.predict_proba(mesh)[:, 1].reshape(xx.shape)
+
         contour = ax.contourf(
-            xx, yy, proba, levels=np.linspace(0, 1, 21),
-            cmap="coolwarm", norm=Normalize(vmin=0, vmax=1),
+            xx, yy, proba,
+            levels=levels,
+            cmap="coolwarm",
+            norm=Normalize(vmin=0, vmax=1),
         )
-        ax.contour(xx, yy, proba, levels=[0.5], colors="black", linewidths=1.1)
+
+        ax.contour(
+            xx, yy, proba,
+            levels=[0.5],
+            colors="black",
+            linewidths=1.1,
+        )
+
         ax.scatter(
-            X_train[:, 0], X_train[:, 1], c=y_train,
-            cmap="coolwarm", vmin=0, vmax=1,
-            s=10, alpha=0.5, edgecolors="none",
+            X_train[:, 0],
+            X_train[:, 1],
+            c=y_train,
+            cmap="coolwarm",
+            vmin=0,
+            vmax=1,
+            s=10,
+            alpha=0.45,
+            edgecolors="none",
         )
+
         ax.set_title(name, fontsize=11)
         ax.set_xlabel("Feature $x_1$")
         ax.set_ylabel("Feature $x_2$")
-    fig.colorbar(contour, cax=colorbar_ax, label="Predicted P(y = 1)")
-    fig.suptitle("Decision probability maps and training observations", y=0.99)
-    fig.subplots_adjust(top=0.92, bottom=0.08, left=0.08, right=0.94)
+
+    # The sixth panel shows the true probability, when known.
+    ax = axes[-1]
+
+    if dataset == "mixed":
+        margin = np.where(
+            mesh[:, 0] < -0.25,
+            mesh[:, 1] - 0.25,
+            (mesh[:, 0] + mesh[:, 1] - 0.4) / np.sqrt(2),
+        )
+        true_proba = expit(5.0 * margin).reshape(xx.shape)
+
+    elif dataset == "diagonal":
+        margin = (mesh[:, 0] + mesh[:, 1]) / np.sqrt(2)
+        true_proba = expit(3.5 * margin).reshape(xx.shape)
+
+    else:
+        true_proba = None
+
+    if true_proba is not None:
+        ax.contourf(
+            xx, yy, true_proba,
+            levels=levels,
+            cmap="coolwarm",
+            norm=Normalize(vmin=0, vmax=1),
+        )
+
+        ax.contour(
+            xx, yy, true_proba,
+            levels=[0.5],
+            colors="black",
+            linewidths=1.1,
+        )
+
+        ax.set_title("True probability", fontsize=11)
+        ax.set_xlabel("Feature $x_1$")
+        ax.set_ylabel("Feature $x_2$")
+    else:
+        ax.axis("off")
+
+    fig.colorbar(
+        contour,
+        ax=axes.tolist(),
+        shrink=0.75,
+        pad=0.02,
+        label="P(y = 1)",
+    )
+
+    fig.suptitle(
+        f"Decision probability maps: {dataset}",
+        fontsize=15,
+    )
+
     fig.savefig(output_path, dpi=160)
     plt.close(fig)
 
 
 def plot_metrics(results: list[dict], output_path: Path) -> None:
-    """Two simple plots showing test metrics, not a performance claim."""
+    """Compare accuracy and Brier score on the held-out test set."""
+
     short_names = [
-        "CART", "sklearn RF", "Oblique L0", "Oblique L0 + stability"
+        "CART",
+        "sklearn RF",
+        "Oblique",
+        "Oblique + L0",
+        "Oblique + L0 + stability",
     ]
+
     x = np.arange(len(results))
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.4))
-    axes[0].bar(x, [r["accuracy"] for r in results])
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+
+    axes[0].bar(
+        x,
+        [r["accuracy"] for r in results],
+    )
     axes[0].set_title("Test accuracy (higher is better)")
     axes[0].set_ylim(0, 1)
-    axes[1].bar(x, [r["brier"] for r in results])
+
+    axes[1].bar(
+        x,
+        [r["brier"] for r in results],
+    )
     axes[1].set_title("Test Brier score (lower is better)")
     axes[1].set_ylim(bottom=0)
+
     for ax in axes:
-        ax.set_xticks(x, short_names, rotation=25, ha="right")
+        ax.set_xticks(x)
+        ax.set_xticklabels(short_names, rotation=30, ha="right")
         ax.grid(axis="y", alpha=0.2)
-    fig.suptitle("Single train/test split: illustrative comparison")
+
+    fig.suptitle("Illustrative comparison on one train/test split")
     fig.tight_layout()
     fig.savefig(output_path, dpi=160)
     plt.close(fig)
@@ -308,7 +421,13 @@ def main() -> None:
         X, y, test_size=0.3, stratify=y, random_state=args.seed
     )
     print(f"Dataset: {args.dataset}, train={len(y_train)}, test={len(y_test)}")
-    models = create_models(args.seed, args.n_estimators, args.n_bootstraps)
+    models = create_models(
+        seed=args.seed,
+        n_estimators=args.n_estimators,
+        n_bootstraps=args.n_bootstraps,
+        sparsity_penalty=args.sparsity_penalty,
+        stability_penalty=args.stability_penalty,
+    )
     results = evaluate_models(models, X_train, X_test, y_train, y_test)
     print_results(results)
 
@@ -322,7 +441,13 @@ def main() -> None:
     }
     print("Generating plots...")
     plot_probability_maps(
-        models, X_train, y_train, X_test, plots["Decision maps"], args.grid_size
+        models=models,
+        X_train=X_train,
+        y_train=y_train,
+        X_test=X_test,
+        output_path=plots["Decision maps"],
+        grid_size=args.grid_size,
+        dataset=args.dataset,
     )
     plot_metrics(results, plots["Test metrics"])
     has_stability_plot = plot_root_stability(stable_pipeline, plots["Root stability"])
