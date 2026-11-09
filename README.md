@@ -4,24 +4,39 @@ Research implementation for **Local Feature-Selection Stability in Oblique Rando
 
 This repository contains an implementation of sparse oblique decision trees and their ensembles. At each internal node, a tree chooses a split from a bank of sparse random projections. The choice can be regularized by the number of active features and by how often each feature is selected in repeated bootstrap fits **at that node**.
 
-The code is designed as a Python package with scikit-learn-compatible estimators. It implements the proposed classifiers and controlled variants, not the dataset benchmarks or the experiments described in the research plan.
+The code is designed as a Python package with scikit-learn-compatible estimators. It implements the proposed classifiers and controlled variants, together with experiment scripts for the synthetic correlation study and the OpenML benchmark (see [`docs/reproduce.md`](docs/reproduce.md)).
 
 ## Installation
 
 Requires Python 3.10 or newer.
 
+The recommended workflow uses [uv](https://docs.astral.sh/uv/). To install the package together with the development and experiment dependencies:
+
+```bash
+uv sync --extra dev --extra experiments
+```
+
+Alternatively, install into an existing environment with:
+
+```bash
+uv pip install -e ".[dev,experiments]"
+```
+
+A plain `pip` installation of the core package also works:
+
 ```bash
 python -m pip install -e .
 ```
 
-For development and testing:
+To run the tests (currently `31 passed`):
 
 ```bash
-python -m pip install -e '.[dev]'
+uv run python -m pytest -q
+# or, without uv:
 python -m pytest -q
 ```
 
-The package has no compiled extensions. It uses NumPy and SciPy for tree construction and scikit-learn's estimator interface for model selection and pipelines.
+The package has no compiled extensions. It uses NumPy and SciPy for tree construction and scikit-learn's estimator interface for model selection and pipelines. The `experiments` extra adds pandas, matplotlib and seaborn, which are needed only by the scripts in `experiments/` and `examples/`.
 
 ## Quick start
 
@@ -174,8 +189,11 @@ src/stable_oblique_forests/
   forest.py        Ensemble training and predictions
   models.py        Baseline and ablation configurations
 tests/             Unit, integration, compatibility and reproducibility tests
-examples/          API usage example only
-docs/              Method mapping and implementation notes
+experiments/       Experiment scripts (exp_correlation.py, exp_openml.py, generate_plots.py)
+examples/          API usage and visual demo examples (e.g. visual_demo.py)
+docs/              Method mapping, implementation notes and reproduction guide
 ```
 
-No benchmarking or data downloading scripts are included yet. Research experiments, including hyperparameter tuning protocols, synthetic grids and dataset selection, are deliberately out of scope for this implementation delivery.
+## Experiments
+
+The scripts in `experiments/` cover the synthetic correlation experiment (`exp_correlation.py`), the OpenML benchmark (`exp_openml.py`), and plot generation (`generate_plots.py`). They require the `experiments` extra (see [Installation](#installation)). Exact commands are listed in [`docs/reproduce.md`](docs/reproduce.md).
