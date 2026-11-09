@@ -16,19 +16,6 @@ imputation + one-hot encoding for categorical columns (credit-g).
 The positive class is the LESS frequent class, so F1 and average precision (mAP) are
 informative. Metrics: Brier loss, accuracy, F1, average precision.
 
-Robustness and reproducibility
-------------------------------
-* ``GridSearchCV(error_score="raise")``: a failing grid cell aborts the run immediately,
-  with the dataset / repeat / fold in the error message, instead of becoming a silent NaN.
-* Each dataset is loaded with several fallback strategies (by name with two parsers, then by
-  OpenML data id). Every attempt is logged. A dataset that cannot be loaded is NOT silently
-  dropped: it is recorded as ``skipped`` (with the error details) in ``openml_summary.csv``
-  and in ``openml_config.json``. Use ``--fail-on-skip`` to exit non-zero in that case.
-* Seeds depend only on (--seed, canonical dataset index, repeat, fold), never on which
-  datasets happened to load or on --n-jobs. Every fold runs with BLAS/OpenMP limited to one
-  thread, so the numerical results do not depend on the number of worker processes either
-  (only ``fit_seconds`` varies from run to run).
-
 Run from the repository root (needs internet on first use; scikit-learn caches the data):
 
     uv pip install pandas                                   # once, required by fetch_openml
@@ -61,7 +48,6 @@ from sklearn.metrics import f1_score, make_scorer
 from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from threadpoolctl import threadpool_limits
 
 from stable_oblique_forests import (
     ObliqueRandomForestClassifier,
@@ -70,14 +56,6 @@ from stable_oblique_forests import (
 )
 
 DATASETS = ("breast-w", "diabetes", "credit-g", "ionosphere", "banknote-authentication")
-# Last-resort fallback: OpenML data ids (version 1 of each dataset). Verify on openml.org.
-OPENML_IDS = {
-    "breast-w": 15,
-    "diabetes": 37,
-    "credit-g": 31,
-    "ionosphere": 59,
-    "banknote-authentication": 1462,
-}
 PENALTIES = (0.0, 0.001, 0.005)
 METRICS = ("brier", "accuracy", "f1", "average_precision")
 SCORING = {
@@ -91,37 +69,12 @@ RF_MATCHED = "Random forest (size-matched)"
 OBLIQUE_PLAIN = "Oblique (lambda=0, gamma=0)"
 OBLIQUE_TUNED = "Oblique tuned (nested CV)"
 MODEL_ORDER = [RF_DEFAULT, RF_MATCHED, OBLIQUE_PLAIN, OBLIQUE_TUNED]
-MAX_ERROR_CHARS = 300
 
 
 # ----------------------------------------------------------------------------- data
-class DatasetLoadError(Exception):
-    """Raised when every loading strategy for a dataset failed; carries the attempt log."""
-
-    def __init__(self, name, attempts):
-        self.name = name
-        self.attempts = attempts
-        super().__init__(f"{name}: all {len(attempts)} loading attempts failed")
-
-
-def _short(message):
-    message = " ".join(str(message).split())
-    return message if len(message) <= MAX_ERROR_CHARS else message[: MAX_ERROR_CHARS - 3] + "..."
-
-
-def format_attempts(attempts):
-    """One-line, CSV-friendly description of a list of loading attempts."""
-    parts = []
-    for a in attempts:
-        text = f"{a['strategy']}: {a['outcome']}"
-        if a["outcome"] != "ok":
-            text += f" ({a['error_type']}: {a['error_message']})"
-        parts.append(text)
-    return " | ".join(parts)
-
-
-def _prepare(bunch, name, strategy):
-    """Convert a fetched OpenML bunch into (X, y in {0,1}, info). Raises on bad data."""
+def load_dataset(name, data_home):
+    """Download one OpenML dataset (version 1); return X, y in {0,1}, and metadata."""
+    bunch = fetch_openml(name=name, version=1, as_frame=True, data_home=data_home, parser="auto")
     X = bunch.data.copy()
     for col in X.select_dtypes(include="category").columns:  # plain object dtype for imputers
         X[col] = X[col].astype(object)
@@ -132,42 +85,8 @@ def _prepare(bunch, name, strategy):
     positive = labels[int(np.argmin(counts))]  # minority class (ties: first label)
     y = (labels_raw == positive).astype(int)
     info = dict(n_samples=len(y), n_features=X.shape[1], positive_class=str(positive),
-                positive_rate=float(y.mean()), openml_id=str(bunch.details.get("id", "")),
-                loaded_via=strategy)
+                positive_rate=float(y.mean()), openml_id=str(bunch.details.get("id", "")))
     return X, y, info
-
-
-def load_dataset(name, data_home):
-    """Download one OpenML dataset, trying several strategies in order.
-
-    Returns (X, y, info, attempts). Raises ImportError immediately if pandas is missing
-    (fatal for every dataset) and DatasetLoadError if every strategy failed.
-    """
-    strategies = [
-        ("name, version=1, parser=auto", dict(name=name, version=1, parser="auto")),
-        ("name, version=1, parser=liac-arff", dict(name=name, version=1, parser="liac-arff")),
-    ]
-    if name in OPENML_IDS:
-        strategies.append((f"data_id={OPENML_IDS[name]}",
-                           dict(data_id=OPENML_IDS[name], parser="auto")))
-
-    attempts = []
-    for strategy, kwargs in strategies:
-        try:
-            bunch = fetch_openml(as_frame=True, data_home=data_home, n_retries=3, delay=1.0,
-                                 **kwargs)
-            X, y, info = _prepare(bunch, name, strategy)
-        except ImportError:
-            raise  # missing pandas: not a per-dataset problem
-        except Exception as exc:  # network problems, renamed datasets, parser issues, ...
-            attempts.append(dict(strategy=strategy, outcome="failed",
-                                 error_type=type(exc).__name__, error_message=_short(exc)))
-            print(f"  [attempt failed] {name} via {strategy}: "
-                  f"{type(exc).__name__}: {_short(exc)}", flush=True)
-            continue
-        attempts.append(dict(strategy=strategy, outcome="ok", error_type="", error_message=""))
-        return X, y, info, attempts
-    raise DatasetLoadError(name, attempts)
 
 
 def make_preprocessor():
@@ -187,13 +106,9 @@ def with_preprocessing(classifier):
 
 
 # ------------------------------------------------------------------------ evaluation
-def fold_seed(base_seed, ds_index, repeat, fold):
-    """Seed for one outer fold: a pure function of its identity, independent of n_jobs."""
-    return int(np.random.default_rng([base_seed, ds_index, repeat, fold]).integers(2**31 - 1))
-
-
-def _run_fold_impl(ds_index, dataset, repeat, fold, X, y, train, test, args):
-    seed = fold_seed(args.seed, ds_index, repeat, fold)
+def run_fold(ds_index, dataset, repeat, fold, X, y, train, test, args):
+    """Fit and score every model on one outer fold. Returns (result rows, grid rows)."""
+    seed = int(np.random.default_rng([args.seed, ds_index, repeat, fold]).integers(2**31 - 1))
     X_tr, X_te, y_tr, y_te = X.iloc[train], X.iloc[test], y[train], y[test]
 
     def oblique():
@@ -206,7 +121,6 @@ def _run_fold_impl(ds_index, dataset, repeat, fold, X, y, train, test, args):
     tuned = GridSearchCV(
         with_preprocessing(oblique()), grid, scoring=SCORING, refit="brier",
         cv=StratifiedKFold(args.inner_folds, shuffle=True, random_state=seed), n_jobs=1,
-        error_score="raise",  # never turn grid-search failures into silent NaN scores
     )
     models = {
         RF_DEFAULT: with_preprocessing(
@@ -242,22 +156,6 @@ def _run_fold_impl(ds_index, dataset, repeat, fold, X, y, train, test, args):
     return rows, grid_rows
 
 
-def run_fold(ds_index, dataset, repeat, fold, X, y, train, test, args):
-    """Fit and score every model on one outer fold. Returns (result rows, grid rows).
-
-    Runs with BLAS/OpenMP limited to one thread so results do not depend on --n-jobs, and
-    re-raises any failure with the fold identity attached (original traceback is chained).
-    """
-    try:
-        with threadpool_limits(limits=1):
-            return _run_fold_impl(ds_index, dataset, repeat, fold, X, y, train, test, args)
-    except Exception as exc:
-        raise RuntimeError(
-            f"fold failed: dataset={dataset} repeat={repeat} fold={fold}: "
-            f"{type(exc).__name__}: {exc}"
-        ) from exc
-
-
 # ------------------------------------------------------------------------- reporting
 def mean_std(items, key):
     v = np.array([it[key] for it in items], dtype=float)
@@ -271,7 +169,7 @@ def summarize(rows, info):
     order = {m: i for i, m in enumerate(MODEL_ORDER)}
     summary = []
     for (dataset, model), items in sorted(groups.items(), key=lambda kv: (list(info).index(kv[0][0]), order[kv[0][1]])):
-        rec = dict(dataset=dataset, status="ok", **info[dataset], model=model, n_folds=len(items))
+        rec = dict(dataset=dataset, **info[dataset], model=model, n_folds=len(items))
         for m in METRICS:
             rec[f"{m}_mean"], rec[f"{m}_std"] = mean_std(items, m)
         rec["chosen_penalties"] = "; ".join(
@@ -280,15 +178,6 @@ def summarize(rows, info):
         ) if model == OBLIQUE_TUNED else ""
         summary.append(rec)
     return summary
-
-
-def skipped_records(load_status):
-    """Summary-CSV rows for datasets that could not be loaded (metric columns stay empty)."""
-    return [
-        dict(dataset=name, status="skipped", error_type=s["error_type"],
-             error_message=s["error_message"], attempts_log=format_attempts(s["attempts"]))
-        for name, s in load_status.items() if s["status"] == "skipped"
-    ]
 
 
 def summarize_grid(grid_rows):
@@ -305,23 +194,98 @@ def summarize_grid(grid_rows):
 
 
 def write_csv(path, records):
-    """Write records to CSV; the header is the union of all keys (first-seen order)."""
-    fieldnames = list(dict.fromkeys(key for rec in records for key in rec))
     with open(path, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fieldnames, restval="")
+        writer = csv.DictWriter(fh, fieldnames=list(records[0]))
         writer.writeheader()
         writer.writerows(records)
 
 
-def print_summary(summary, load_status):
-    ok_rows = [r for r in summary if r["status"] == "ok"]
+def print_summary(summary):
     print("\nOuter-fold test results, mean +/- std (Brier: lower is better; others: higher)")
-    for dataset in dict.fromkeys(r["dataset"] for r in ok_rows):
-        block = [r for r in ok_rows if r["dataset"] == dataset]
+    for dataset in dict.fromkeys(r["dataset"] for r in summary):
+        block = [r for r in summary if r["dataset"] == dataset]
         print(f"\n[{dataset}] n={block[0]['n_samples']}, p={block[0]['n_features']}, "
-              f"positive='{block[0]['positive_class']}' ({block[0]['positive_rate']:.2f}), "
-              f"loaded via {block[0]['loaded_via']}")
+              f"positive='{block[0]['positive_class']}' ({block[0]['positive_rate']:.2f})")
         print(f"  {'Model':32} {'Brier':>14} {'Accuracy':>14} {'F1':>14} {'mAP':>14}")
         for r in block:
             cells = [f"{r[f'{m}_mean']:.3f}+/-{np.nan_to_num(r[f'{m}_std']):.3f}" for m in METRICS]
             print(f"  {r['model']:32} " + " ".join(f"{c:>14}" for c in cells))
+        tuned = [r for r in block if r["chosen_penalties"]]
+        if tuned:
+            print(f"  selected penalties: {tuned[0]['chosen_penalties']}")
+
+
+# ----------------------------------------------------------------------------- main
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--datasets", nargs="+", default=None, choices=DATASETS)
+    p.add_argument("--n-estimators", type=int, default=100)
+    p.add_argument("--n-bootstraps", type=int, default=10)
+    p.add_argument("--outer-folds", type=int, default=5)
+    p.add_argument("--inner-folds", type=int, default=3)
+    p.add_argument("--n-repeats", type=int, default=1, help="repeats of the outer CV")
+    p.add_argument("--seed", type=int, default=2026)
+    p.add_argument("--n-jobs", type=int, default=1, help="processes across outer folds")
+    p.add_argument("--output-dir", type=Path, default=Path("outputs"))
+    p.add_argument("--data-home", default=None, help="scikit-learn data cache directory")
+    p.add_argument("--quick", action="store_true",
+                   help="smoke test: first 2 datasets, 10 trees, 3 bootstraps, 3 outer / 2 inner folds")
+    args = p.parse_args()
+    if args.quick:
+        args.n_estimators, args.n_bootstraps, args.outer_folds, args.inner_folds = 10, 3, 3, 2
+    args.datasets = args.datasets or list(DATASETS[:2] if args.quick else DATASETS)
+    return args
+
+
+def main():
+    args = parse_args()
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    data, info = {}, {}
+    for name in args.datasets:
+        try:
+            data[name] = load_dataset(name, args.data_home)
+            info[name] = data[name][2]
+            print(f"loaded {name}: {info[name]}", flush=True)
+        except ImportError as exc:
+            sys.exit(f"{exc}\nInstall pandas first: uv pip install pandas")
+        except Exception as exc:  # network problems, renamed datasets, ...
+            print(f"[skip] {name}: {type(exc).__name__}: {exc}", flush=True)
+    if not data:
+        sys.exit("No dataset could be loaded (check the internet connection).")
+
+    jobs = []
+    for ds_index, (name, (X, y, _)) in enumerate(data.items()):
+        splitter = RepeatedStratifiedKFold(n_splits=args.outer_folds, n_repeats=args.n_repeats,
+                                           random_state=args.seed + ds_index)
+        for i, (train, test) in enumerate(splitter.split(X, y)):
+            jobs.append((ds_index, name, i // args.outer_folds, i % args.outer_folds, X, y, train, test))
+
+    config = {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()}
+    config.update(penalty_grid=list(PENALTIES), datasets_info=info,
+                  versions=dict(python=sys.version.split()[0], platform=platform.platform(),
+                                numpy=np.__version__, scikit_learn=sklearn.__version__))
+    (args.output_dir / "openml_config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+    start = time.perf_counter()
+    rows, grid_rows = [], []
+    results = Parallel(n_jobs=args.n_jobs, return_as="generator")(
+        delayed(run_fold)(*job, args) for job in jobs)
+    for job, (fold_rows, fold_grid) in zip(jobs, results):
+        rows.extend(fold_rows)
+        grid_rows.extend(fold_grid)
+        print(f"  done {job[1]} repeat={job[2]} fold={job[3]} "
+              f"({time.perf_counter() - start:.0f}s elapsed)", flush=True)
+
+    summary = summarize(rows, info)
+    write_csv(args.output_dir / "openml_summary.csv", summary)
+    write_csv(args.output_dir / "openml_grid_summary.csv", summarize_grid(grid_rows))
+    write_csv(args.output_dir / "openml_raw.csv", rows)
+    print_summary(summary)
+    print(f"\nSaved openml_summary.csv, openml_grid_summary.csv, openml_raw.csv and "
+          f"openml_config.json to {args.output_dir.resolve()}")
+
+
+if __name__ == "__main__":
+    main()
