@@ -122,9 +122,24 @@ SCORING = {
 RF_DEFAULT = "RF default"
 RF_MATCHED = "RF size-matched"
 OBLIQUE_PLAIN = "Oblique baseline"
-OBLIQUE_TUNED = "Oblique tuned"
-MODEL_ORDER = [RF_DEFAULT, RF_MATCHED, OBLIQUE_PLAIN, OBLIQUE_TUNED]
-TUNED_KEYS = ("sparsity_penalty", "stability_penalty", "max_depth", "min_samples_leaf")
+OBLIQUE_L0_TUNED = "Oblique L0 tuned"
+OBLIQUE_TUNED = "Oblique L0+stability tuned"
+
+MODEL_ORDER = [
+    RF_DEFAULT,
+    RF_MATCHED,
+    OBLIQUE_PLAIN,
+    OBLIQUE_L0_TUNED,
+    OBLIQUE_TUNED,
+]
+
+TUNED_KEYS = (
+    "sparsity_penalty",
+    "stability_penalty",
+    "max_depth",
+    "min_samples_leaf",
+)
+
 
 
 class LogUniformOrZero:
@@ -150,6 +165,13 @@ SEARCH_SPACE = {
     "clf__max_depth": [6, 8, 12, None],
     "clf__min_samples_leaf": [5, 10, 20],
 }
+
+SEARCH_SPACE_L0 = {
+    key: value
+    for key, value in SEARCH_SPACE.items()
+    if key != "clf__stability_penalty"
+}
+
 
 
 # ----------------------------------------------------------------------------- data
@@ -246,64 +268,198 @@ def with_preprocessing(classifier):
 
 # ------------------------------------------------------------------------ evaluation
 def run_fold(key, ds_seed, repeat, fold, X, y, train, test, args):
-    """Tune, fit and score every model on one outer fold. Returns (result rows, trial rows)."""
-    seed = int(np.random.default_rng([ds_seed, repeat, fold]).integers(2**31 - 1))
-    X_tr, X_te, y_tr, y_te = X.iloc[train], X.iloc[test], y[train], y[test]
+    """Tune and evaluate all models on one outer fold."""
+
+    seed = int(
+        np.random.default_rng(
+            [ds_seed, repeat, fold]
+        ).integers(2**31 - 1)
+    )
+
+    X_tr, X_te = X.iloc[train], X.iloc[test]
+    y_tr, y_te = y[train], y[test]
 
     def oblique(n_estimators, **params):
         return ObliqueRandomForestClassifier(
-            n_estimators=n_estimators, n_bootstraps=args.n_bootstraps,
-            random_state=seed, n_jobs=1, **params)
+            n_estimators=n_estimators,
+            n_bootstraps=args.n_bootstraps,
+            random_state=seed,
+            n_jobs=1,
+            **params,
+        )
 
-    # Nested random search on the outer training fold only; selection by inner-CV Brier loss.
-    search = RandomizedSearchCV(
-        with_preprocessing(oblique(args.search_n_estimators)),
-        param_distributions=SEARCH_SPACE, n_iter=args.n_iter, scoring=SCORING, refit=False,
-        cv=StratifiedKFold(args.inner_folds, shuffle=True, random_state=seed),
-        random_state=seed, error_score="raise", n_jobs=1,
+    def tune_model(search_space):
+        search = RandomizedSearchCV(
+            estimator=with_preprocessing(
+                oblique(args.search_n_estimators)
+            ),
+            param_distributions=search_space,
+            n_iter=args.n_iter,
+            scoring=SCORING,
+            refit=False,
+            cv=StratifiedKFold(
+                args.inner_folds,
+                shuffle=True,
+                random_state=seed,
+            ),
+            random_state=seed,
+            error_score="raise",
+            n_jobs=1,
+        )
+
+        start = time.perf_counter()
+        search.fit(X_tr, y_tr)
+        search_seconds = time.perf_counter() - start
+
+        cv_results = search.cv_results_
+        best_idx = int(
+            np.argmax(cv_results["mean_test_brier"])
+        )
+
+        best_params = {
+            name.split("__", 1)[1]: value
+            for name, value
+            in cv_results["params"][best_idx].items()
+        }
+
+        return best_params, search_seconds, cv_results, best_idx
+
+    # Tune the L0-only model.
+    l0_params, l0_search_time, l0_cv, l0_best = tune_model(
+        SEARCH_SPACE_L0
     )
-    start = time.perf_counter()
-    search.fit(X_tr, y_tr)
-    search_seconds = time.perf_counter() - start
-    res = search.cv_results_
-    best = int(np.argmax(res["mean_test_brier"]))  # neg_brier_score: larger is better
-    best_params = {name.split("__", 1)[1]: value for name, value in res["params"][best].items()}
+    l0_params["stability_penalty"] = 0.0
+
+    # Tune the complete stability-aware model.
+    full_params, full_search_time, full_cv, full_best = tune_model(
+        SEARCH_SPACE
+    )
+
+    tuned_params = {
+        OBLIQUE_L0_TUNED: l0_params,
+        OBLIQUE_TUNED: full_params,
+    }
+
+    search_times = {
+        OBLIQUE_L0_TUNED: l0_search_time,
+        OBLIQUE_TUNED: full_search_time,
+    }
 
     models = {
         RF_DEFAULT: with_preprocessing(
-            make_random_forest_reference(n_estimators=args.n_estimators, random_state=seed)),
-        RF_MATCHED: with_preprocessing(RandomForestClassifier(
-            n_estimators=args.n_estimators, max_depth=8, min_samples_split=60,
-            min_samples_leaf=15, random_state=seed)),
-        OBLIQUE_PLAIN: with_preprocessing(oblique(args.n_estimators)),
-        OBLIQUE_TUNED: with_preprocessing(oblique(args.n_estimators, **best_params)),
+            make_random_forest_reference(
+                n_estimators=args.n_estimators,
+                random_state=seed,
+            )
+        ),
+
+        RF_MATCHED: with_preprocessing(
+            RandomForestClassifier(
+                n_estimators=args.n_estimators,
+                max_depth=8,
+                min_samples_split=60,
+                min_samples_leaf=15,
+                random_state=seed,
+            )
+        ),
+
+        OBLIQUE_PLAIN: with_preprocessing(
+            oblique(args.n_estimators)
+        ),
+
+        OBLIQUE_L0_TUNED: with_preprocessing(
+            oblique(args.n_estimators, **l0_params)
+        ),
+
+        OBLIQUE_TUNED: with_preprocessing(
+            oblique(args.n_estimators, **full_params)
+        ),
     }
+
     rows = []
+
     for name, model in models.items():
         start = time.perf_counter()
         model.fit(X_tr, y_tr)
         fit_seconds = time.perf_counter() - start
+
         proba = model.predict_proba(X_te)
-        row = dict(dataset=key, repeat=repeat, fold=fold, model=name,
-                   n_train=len(y_tr), n_test=len(y_te), fit_seconds=fit_seconds,
-                   search_seconds=search_seconds if name == OBLIQUE_TUNED else 0.0,
-                   sparsity_penalty="", stability_penalty="", max_depth="", min_samples_leaf="")
-        row.update(binary_classification_metrics(y_te, np.argmax(proba, axis=1), proba[:, 1]))
-        if name == OBLIQUE_TUNED:
-            row.update(sparsity_penalty=best_params["sparsity_penalty"],
-                       stability_penalty=best_params["stability_penalty"],
-                       max_depth=str(best_params["max_depth"]),
-                       min_samples_leaf=best_params["min_samples_leaf"])
+        y_pred = model.classes_[np.argmax(proba, axis=1)]
+
+        row = dict(
+            dataset=key,
+            repeat=repeat,
+            fold=fold,
+            model=name,
+            n_train=len(y_tr),
+            n_test=len(y_te),
+            fit_seconds=fit_seconds,
+            search_seconds=search_times.get(name, 0.0),
+            sparsity_penalty="",
+            stability_penalty="",
+            max_depth="",
+            min_samples_leaf="",
+        )
+
+        row.update(
+            binary_classification_metrics(
+                y_te, y_pred, proba[:, 1]
+            )
+        )
+
+        if name in tuned_params:
+            params = tuned_params[name]
+
+            row.update(
+                sparsity_penalty=params["sparsity_penalty"],
+                stability_penalty=params["stability_penalty"],
+                max_depth=str(params["max_depth"]),
+                min_samples_leaf=params["min_samples_leaf"],
+            )
+
         rows.append(row)
 
-    trials = [
-        dict(dataset=key, repeat=repeat, fold=fold, trial=i, selected=int(i == best),
-             sparsity_penalty=p["clf__sparsity_penalty"], stability_penalty=p["clf__stability_penalty"],
-             max_depth=str(p["clf__max_depth"]), min_samples_leaf=p["clf__min_samples_leaf"],
-             brier=-res["mean_test_brier"][i], accuracy=res["mean_test_accuracy"][i],
-             f1=res["mean_test_f1"][i], average_precision=res["mean_test_average_precision"][i])
-        for i, p in enumerate(res["params"])
-    ]
+    # Save inner-CV results for both tuned models.
+    trials = []
+
+    for model_name, cv_results, best_idx in [
+        (OBLIQUE_L0_TUNED, l0_cv, l0_best),
+        (OBLIQUE_TUNED, full_cv, full_best),
+    ]:
+        for i, params in enumerate(cv_results["params"]):
+            trials.append(
+                dict(
+                    dataset=key,
+                    repeat=repeat,
+                    fold=fold,
+                    model=model_name,
+                    trial=i,
+                    selected=int(i == best_idx),
+                    sparsity_penalty=params[
+                        "clf__sparsity_penalty"
+                    ],
+                    stability_penalty=params.get(
+                        "clf__stability_penalty", 0.0
+                    ),
+                    max_depth=str(
+                        params["clf__max_depth"]
+                    ),
+                    min_samples_leaf=params[
+                        "clf__min_samples_leaf"
+                    ],
+                    brier=-cv_results[
+                        "mean_test_brier"
+                    ][i],
+                    accuracy=cv_results[
+                        "mean_test_accuracy"
+                    ][i],
+                    f1=cv_results["mean_test_f1"][i],
+                    average_precision=cv_results[
+                        "mean_test_average_precision"
+                    ][i],
+                )
+            )
+
     return rows, trials
 
 
@@ -329,7 +485,7 @@ def summarize(rows, info):
         rec["search_seconds_mean"], _ = mean_std(items, "search_seconds")
         rec.update(tuned_lambda_zero_folds="", tuned_lambda_median="", tuned_gamma_zero_folds="",
                    tuned_gamma_median="", tuned_max_depth_counts="", tuned_min_samples_leaf_counts="")
-        if model == OBLIQUE_TUNED:
+        if model in (OBLIQUE_L0_TUNED, OBLIQUE_TUNED):
             lam = np.array([float(it["sparsity_penalty"]) for it in items])
             gam = np.array([float(it["stability_penalty"]) for it in items])
             rec.update(
