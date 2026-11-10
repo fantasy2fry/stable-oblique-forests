@@ -34,8 +34,14 @@ These are **negative results for the tested settings**, not a refutation of the 
 
 ### 1.3 What is and is not verified
 
-- The code was audited against the formulas in the project brief, `README.md` and `docs/implementation_notes.md`. The **research plan PDF was not available** during the audit. Items still to be reconciled with it are listed in §2.5.
-- The experiments use 5 replicates or folds, share seeds across cells, and include no hypothesis tests. Statements of "consistency" refer to signs across cells.
+- The implementation was checked against the mathematical specification, the
+  research plan, `README.md` and `docs/implementation_notes.md`. The main
+  algorithmic requirements of the plan are implemented; the deviations from
+  the full planned evaluation are listed in §2.5 and §4.4.
+- This is a Milestone 1 checkpoint, not the final study. The synthetic pilot
+  uses 5 replicates per cell rather than the 20 planned for the full study.
+  The OpenML benchmark uses one seed per outer fold, while the plan proposed
+  two. No confirmatory hypothesis tests are reported at this stage.
 
 ---
 
@@ -46,7 +52,7 @@ These are **negative results for the tested settings**, not a refutation of the 
 For a candidate split $c$ at node $v$ the implemented score is
 
 $$
-- S_v(c) = \widehat{\mathcal{L}}_{v,H}(c) + \lambda \,\|w_c\|_0 + \gamma \sum_{j \in \mathrm{supp}(w_c)} \bigl(1 - \widehat{\pi}_{v,j}\bigr),
+S_v(c) = \widehat{\mathcal{L}}_{v,H}(c) + \lambda \,\|w_c\|_0 + \gamma \sum_{j \in \mathrm{supp}(w_c)} \bigl(1 - \widehat{\pi}_{v,j}\bigr),
 $$
 
 where $\widehat{\mathcal{L}}_{v,H}$ is the mean Brier loss on the assessment pool $H_v$, with child probabilities fitted on the construction pool $A_v$. Each term was checked in `tree.py::_build` (lines 264–287):
@@ -55,7 +61,7 @@ where $\widehat{\mathcal{L}}_{v,H}$ is the mean Brier loss on the assessment poo
 |---|---|---|
 | Loss | `assessment_loss(c, X, y, H)`, mean Brier on $H_v$ | Verified |
 | L0 term | `sparsity_penalty * c.sparsity` | Verified |
-| Stability term | `stability_penalty * Σ(1 − effective_frequencies[c.support])`, a **sum**, not a mean | Verified in code; sum-versus-mean still to confirm against the PDF |
+| Stability term | `stability_penalty * Σ(1 − effective_frequencies[c.support])`, a **sum**, not a mean | Verified against the plan |
 | No-split option | Scored as the parent's smoothed probability on $H_v$ with no penalty; a split is accepted only if `score < best_score` (strictly better) | Verified |
 
 Penalties are **absolute** and are added to a node-local mean loss. A given $\lambda$ therefore means the same at the root and at a 25-sample leaf. This is a design property, not a bug, but it should be stated in the paper.
@@ -74,28 +80,62 @@ When `stability_penalty == 0`, the node-level bootstrap is skipped (line 248), t
 ### 2.4 Independence of $\widehat{\pi}$ from assessment labels, and test status
 
 - **Code inspection (done):** $\widehat{\pi}$, threshold fitting and probability fitting use $A_v$ only. No label from $H_v$ enters $\widehat{\pi}$. No leakage was found. Preprocessing is fitted inside the pipeline on training folds, and outer test folds are never used for tuning.
-- **Unit tests:** **31 tests pass** (Windows and Linux); the scikit-learn `check_estimator` suite is reported as passing. Forests are identical for `n_jobs=1` and `n_jobs=2`.
-- **Gap to close:** there is **no dedicated unit test** asserting that $\widehat{\pi}$ is independent of the assessment labels. The independence is established by reading the code, not by a test. Adding this test is on the Sprint 2 list (§5.5).
+- **Unit tests:** the checkpoint suite contains 31 tests and the
+  scikit-learn `check_estimator` suite was reported as passing in the
+  development environment. Forests are identical for `n_jobs=1` and
+  `n_jobs=2`.
+- **Test coverage qualification:** `test_pi_hat_independent_of_assessment_labels`
+  verifies the equivalent bootstrap-frequency procedure using a fixed bank.
+  A higher-level test that exercises the complete tree-building path would
+  still strengthen this guarantee.
 
-### 2.5 Items still to confirm against the research plan PDF
+### 2.5 Conformance with the research plan
 
-1. $\widehat{\pi}$ defined over bootstrap resamples of $A_v$ with the L0-penalised training Brier as selection rule.
-2. Stability term is a **sum** of $(1-\widehat\pi_j)$.
-3. Defaults: support sizes {1, 2, 4, 8}, 8 directions per size, B = 10, assessment fraction 0.2, minimum leaf 15, minimum split 60, depth 8.
-4. The tuning strategy relies on `RandomizedSearchCV` drawing $\lambda, \gamma$ from a log-uniform distribution over $[1e-4, 1e-1]$ with a 20% chance of exactly $0.0$.
-5. Absolute penalties (implemented) versus node-size-scaled penalties.
+The core method conforms to the plan:
+
+1. $\widehat{\pi}$ is estimated from bootstrap resamples of $A_v$, using
+   training Brier loss plus the L0 penalty to select each bootstrap winner.
+2. The stability term is a **sum** of $(1-\widehat\pi_j)$ over the candidate
+   support.
+3. The implementation uses the planned defaults: support sizes
+   {1, 2, 4, 8}, 8 directions per size, B = 10, assessment fraction 0.2,
+   minimum leaf 15, minimum split 60 and depth 8.
+4. The OpenML tuning protocol uses `RandomizedSearchCV`, with 25 sampled
+   configurations per outer fold. The two penalty distributions are
+   log-uniform on $[10^{-4}, 10^{-1}]$ with a 20% probability of exactly
+   zero.
+5. The implemented penalties are absolute node-local penalties, as specified
+   by the current objective.
+
+The full evaluation plan is not yet complete: the synthetic study has not
+covered all planned values of $p$, $n$ and signal strength; the planned 20
+replicates and two seeds per outer fold have not been run; and the planned
+diversity, compute-matched and formal statistical analyses remain future work.
 
 ### 2.6 Reproducibility and design strengths
 
 - Node-local RNG streams (child seeds drawn first) mean that penalised variants and controls share partitions, banks and bootstrap draws until their decisions first differ. This paired design is what makes the control comparison possible.
 - Experimental hygiene: common random numbers across models, an oracle Brier reference, nested CV with preprocessing inside the pipeline, a size-matched random-forest baseline, minority class as positive class, and raw plus summary outputs with a config file recording library versions (Python 3.12.10, NumPy 2.5.4, scikit-learn 1.9.1).
 
-### 2.7 Known open issues (none affects the reported numbers)
+### 2.7 Known limitations of this checkpoint
 
-- **Seeding by position:** `exp_correlation.py` seeds data by the position of $\rho$ in `--rho`, and `exp_openml.py` seeds by the position of the dataset among those loaded. A fix (seeds derived from the $\rho$ value and from a hash of the dataset name) requires re-running everything.
-- **`GridSearchCV` / `RandomizedSearchCV`** uses the default `error_score=np.nan` unless explicitly set to `"raise"`.
+- **Synthetic seed identity:** `exp_correlation.py` derives data seeds partly
+  from the position of $\rho$ in the command-line list. Reordering or
+  subsetting `--rho` therefore changes the data seeds. This does not affect
+  the reported run, but should be fixed before the extended study.
+- **Outer-fold seeds:** the current OpenML run uses one deterministic seed per
+  outer fold. Two independent seeds per fold, as proposed in the plan, are
+  still missing.
+- **Search protocol:** the current OpenML experiment intentionally uses
+  randomized search rather than the earlier pilot grid. The report's results
+  and configuration files should be read as describing the randomized-search
+  protocol.
 - **Diagnostics log accepted splits only** (`node_diagnostics_`), so the no-split rate that drives tree-size collapse is inferred, not measured.
 - **Bootstrap multiplicities:** with tree-level bootstrap about 63 % of observations are unique, so a "15-sample" leaf may hold about 9–10 distinct observations, and the node-level resampling is a bootstrap of a bootstrap.
+- **Dataset truncation:** the OpenML command defaults to a stratified
+  `max_samples=3000` cap for larger datasets. This is recorded in
+  `openml_config.json` and is a computational compromise, not the full
+  dataset protocol described in the research plan.
 
 ---
 
@@ -208,10 +248,32 @@ The bootstrapping overhead costs 3–5× over L0 at $B = 10$. Implementing a 25-
 - One correlation structure (block of four) and one signal strength on the synthetic side.
 - Random Search across 15 datasets is subject to the variance of inner-CV selections (frequent ties at 0.0).
 - Stability is defined conditionally on a node-local fixed candidate bank, and assessment data are reused down the tree.
+- The OpenML results use a stratified cap of 3,000 rows for larger datasets,
+  one seed per outer fold, and a manually specified set of 15 datasets rather
+  than the full dataset-selection procedure from the plan.
+- Diversity metrics, compute-matched baselines and formal cross-dataset
+  statistical tests are not part of this checkpoint.
+
+### 4.5 Milestone 1 conclusion
+
+Milestone 1 delivers a working, tested implementation of the proposed
+node-wise stability criterion, its main ablations and a reproducible
+preliminary evaluation on synthetic correlated features and 15 OpenML binary
+classification tasks. The evidence does not support a predictive advantage
+for the stability penalty under the tested settings. Instead, the penalty
+primarily reduces tree size and worsens raw probability calibration, while
+the uniform and shuffled controls suggest that the feature-specific
+frequency signal is weak in this regime.
+
+This conclusion is intentionally limited. It does not establish that the
+method cannot help in high-dimensional, low-sample or strongly redundant
+settings, which are the main targets for Milestone 2. The current result is
+therefore a valid negative checkpoint result and a basis for a more targeted
+follow-up study, not a final rejection of the method.
 
 ---
 
-## 5. Sprint 2 Research Roadmap (Next Two Weeks)
+## 5. Milestone 2 Research Roadmap
 
 ### 5.1 Priority order
 
@@ -234,7 +296,9 @@ The new 15-dataset benchmark highlighted that RF default is stronger on several 
 Explore a continuous penalty combining L1/L2 terms on the direction weights with the stability term to avoid the abrupt deletion of marginal splits that drives tree-size collapse.
 
 ### 5.5 Recalibration and test additions
-Compare post-hoc logistic or isotonic recalibration. Add missing unit tests for $\widehat{\pi}$ independence.
+Compare post-hoc logistic or isotonic recalibration. Add a higher-level
+tree-path test for $\widehat{\pi}$ independence in addition to the existing
+fixed-bank procedure test.
 
 ### 5.6 Milestone 2 decision rule (proposal)
 Continue developing the stability term in its current form only if, in the high-dimensional and stability-only experiments, Stab beats **both** controls in a paired analysis across 20+ replicates.
@@ -243,12 +307,19 @@ Continue developing the stability term in its current form only if, in the high-
 
 ## Appendix A. Source Materials
 
-- `METHODOLOGICAL_ASSESSMENT.md`
-- `openml_config.json`, `openml_benchmark_results.csv`
-- Generated figures from `generate_openml_plots.py` (e.g., `openml_benchmark.png`).
+- Research plan: `Ensemble_project_Frydrysiak_Kukla.pdf`
+- `README.md`, `docs/implementation_notes.md` and `docs/reproduce.md`
+- `outputs/openml_config.json`
+- `outputs/tables/openml_benchmark_results.csv`
+- `outputs/tables/openml_benchmark_summary.csv`
+- `outputs/tables/openml_benchmark_macro.csv`
+- `outputs/tables/openml_search_trials.csv`
+- Synthetic experiment outputs under `outputs/exp_correlation*/`
 
 ## Appendix B. Exact Reproduction Commands
 
-- Initial run: `uv run python experiments/exp_correlation.py`
-- Expanded real data (15 sets): `uv run python experiments/exp_openml.py --n-jobs 4`
-- Plotting real data: `uv run python experiments/generate_openml_plots.py --output-dir outputs`
+- Synthetic pilot: `uv run python experiments/exp_correlation.py`
+- Expanded real-data benchmark: `uv run python experiments/exp_openml.py --n-jobs 4`
+
+Both experiment scripts write their result tables and figures during the same
+run. A separate plotting step is not required for the Milestone 1 protocol.
