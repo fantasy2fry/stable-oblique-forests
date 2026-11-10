@@ -47,6 +47,7 @@ from pathlib import Path
 import numpy as np
 import scipy
 import sklearn
+import matplotlib.pyplot as plt
 from joblib import Parallel, delayed
 from sklearn.ensemble import RandomForestClassifier
 
@@ -253,16 +254,16 @@ def print_summary(summary):
                       f"{'' if np.isnan(rel) else format(rel, '7.2f'):>7}")
 
 
-def make_plots(summary, out_dir):
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
-        print("matplotlib not installed: skipping plots. Install it with "
-              "`uv pip install matplotlib` and re-run, or run with "
-              "`uv run --with matplotlib python experiments/exp_correlation.py`.")
-        return []
+MODEL_COLORS = {
+    "Random forest": "tab:red",
+    "Oblique": "tab:blue",
+    "Oblique + L0": "tab:orange",
+    "Oblique + L0 + stability": "tab:green",
+    "Oblique + L0 + uniform stability": "tab:purple",
+    "Oblique + L0 + shuffled stability": "tab:brown",
+}
+
+def make_plots(summary, raw_rows, out_dir, dpi=300):
     models = [m for m in MODEL_ORDER if any(r["model"] == m for r in summary)]
     rhos = sorted({r["rho"] for r in summary})
     functions = [f for f in FUNCTIONS if any(r["function"] == f for r in summary)]
@@ -273,8 +274,15 @@ def make_plots(summary, out_dir):
             rec.sort(key=lambda r: r["rho"])
             mean = np.array([r[f"{key}_mean"] for r in rec])
             se = np.array([r[f"{key}_std"] / np.sqrt(r["n_replicates"]) for r in rec])
-            ax.errorbar([r["rho"] for r in rec], mean, yerr=np.nan_to_num(se),
-                        marker="o", capsize=3, label=model)
+            ax.errorbar(
+                [r["rho"] for r in rec],
+                mean,
+                yerr=np.nan_to_num(se),
+                color=MODEL_COLORS[model],
+                marker="o",
+                capsize=3,
+                label=model,
+            )
         ax.set_xlabel(r"correlation $\rho$ within $x_1..x_4$")
         ax.set_ylabel(ylabel)
         ax.set_xticks(rhos)
@@ -308,10 +316,114 @@ def make_plots(summary, out_dir):
             panel(axes[i][j], function, key, label, subset)
             if i == 0:
                 axes[i][j].set_title(f"f_{function}")
-    axes[0][0].legend(fontsize=8)
-    fig.tight_layout()
+    handles, labels = axes[-1, 0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.01),
+        ncol=3,
+        fontsize=9,
+    )
+    fig.tight_layout(rect=(0, 0.10, 1, 1))
     path = out_dir / "selection_vs_rho.png"
-    fig.savefig(path, dpi=160)
+    fig.savefig(path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+
+
+    # Additional metrics, averaged over boundary functions
+    # within each replicate, then summarized across replicates.
+    metric_panels = [
+        ("accuracy", "Accuracy (higher is better)"),
+        ("f1", "F1 score (higher is better)"),
+        ("average_precision", "Average precision (higher is better)"),
+        ("nodes_per_tree", "Average nodes per tree"),
+    ]
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
+
+    colors = {
+        model: plt.get_cmap("tab10")(MODEL_ORDER.index(model) % 10)
+        for model in models
+    }
+
+    for ax, (metric, title) in zip(axes.ravel(), metric_panels):
+        for model in models:
+            means = []
+            errors = []
+            available_rhos = []
+
+            for rho in rhos:
+                by_replicate = {}
+
+                for row in raw_rows:
+                    if row["model"] != model:
+                        continue
+                    if float(row["rho"]) != rho:
+                        continue
+
+                    replicate = int(row["replicate"])
+                    by_replicate.setdefault(replicate, []).append(
+                        float(row[metric])
+                    )
+
+                if not by_replicate:
+                    continue
+
+                # One value per replicate, averaged over
+                # the boundary functions in the experiment.
+                values = np.array([
+                    np.mean(replicate_values)
+                    for replicate_values in by_replicate.values()
+                ])
+
+                mean = float(np.mean(values))
+                se = (
+                    float(np.std(values, ddof=1) / np.sqrt(len(values)))
+                    if len(values) > 1 else 0.0
+                )
+
+                available_rhos.append(rho)
+                means.append(mean)
+                errors.append(se)
+
+            if available_rhos:
+                ax.errorbar(
+                    available_rhos,
+                    means,
+                    yerr=errors,
+                    label=model,
+                    color=colors[model],
+                    marker="o",
+                    linewidth=1.7,
+                    capsize=3,
+                )
+
+        ax.set_title(title)
+        ax.set_xlabel("Feature correlation $\\rho$")
+        ax.set_xticks(rhos)
+        ax.grid(alpha=0.25)
+
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.01),
+        ncol=2,
+        fontsize=9,
+    )
+
+    fig.suptitle(
+        "Predictive metrics and tree complexity vs correlation",
+        fontsize=14,
+    )
+
+    fig.tight_layout(rect=(0, 0.13, 1, 0.96))
+
+    path = out_dir / "correlation_metrics.png"
+    fig.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     paths.append(path)
     return paths
@@ -340,6 +452,17 @@ def parse_args():
     p.add_argument("--output-dir", type=Path, default=Path("outputs/exp_correlation"))
     p.add_argument("--quick", action="store_true",
                    help="smoke test: 1 replicate, 10 trees, 2000 test points, 3 bootstraps")
+    p.add_argument(
+        "--dpi",
+        type=int,
+        default=300,
+        help="Resolution of the saved plots.",
+    )
+    p.add_argument(
+        "--plots-only",
+        action="store_true",
+        help="Regenerate plots from saved results without fitting models.",
+    )
     args = p.parse_args()
     if args.quick:
         args.n_replicates, args.n_estimators, args.n_test, args.n_bootstraps = 1, 10, 2000, 3
@@ -353,6 +476,28 @@ def parse_args():
 def main():
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    if args.plots_only:
+        summary_path = args.output_dir / "summary.json"
+        raw_path = args.output_dir / "results_raw.csv"
+
+        summary = json.loads(
+            summary_path.read_text(encoding="utf-8")
+        )["summary"]
+
+        with raw_path.open(newline="", encoding="utf-8") as file:
+            raw_rows = list(csv.DictReader(file))
+
+        plots = make_plots(
+            summary,
+            raw_rows,
+            args.output_dir,
+            dpi=args.dpi,
+        )
+
+        for path in plots:
+            print(f"Saved {path.resolve()}")
+
+        return
     jobs = [(rho, fn, rep, ri) for ri, rho in enumerate(args.rho)
             for fn in args.functions for rep in range(args.n_replicates)]
     config = {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()}
@@ -382,7 +527,12 @@ def main():
         json.dumps({"config": config, "summary": summary}, indent=2, allow_nan=True),
         encoding="utf-8")
     print_summary(summary)
-    plots = make_plots(summary, args.output_dir)
+    plots = make_plots(
+        summary,
+        rows,
+        args.output_dir,
+        dpi=args.dpi,
+    )
     print(f"\nSaved to {args.output_dir.resolve()}:")
     for name in ["config.json", "results_raw.csv", "summary.csv", "summary.json"] + [p.name for p in plots]:
         print(f"  {name}")
