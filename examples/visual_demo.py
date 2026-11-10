@@ -26,13 +26,12 @@ from scipy.special import expit
 from sklearn.base import clone
 from sklearn.datasets import make_moons
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, brier_score_loss
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier
 
-from stable_oblique_forests import ObliqueRandomForestClassifier
+from stable_oblique_forests import ObliqueRandomForestClassifier, binary_classification_metrics
 
 
 # These are small settings for a quick demonstration, not tuned values.
@@ -146,26 +145,26 @@ def evaluate_models(models: dict, X_train, X_test, y_train, y_test) -> list[dict
         p1 = model.predict_proba(X_test)[:, 1]
         y_pred = model.predict(X_test)
         results.append(
-            {
-                "name": name,
-                "accuracy": accuracy_score(y_test, y_pred),
-                "balanced_accuracy": balanced_accuracy_score(y_test, y_pred),
-                "brier": brier_score_loss(y_test, p1),
-            }
+            {"name": name, **binary_classification_metrics(y_test, y_pred, p1)}
         )
     return results
 
 
 def print_results(results: list[dict]) -> None:
     print("\nHeld-out test results (single split, for demonstration only)")
-    print(f"{'Model':37} {'Accuracy':>9} {'Bal. acc.':>10} {'Brier':>9}")
-    print("-" * 70)
+    print(
+        f"{'Model':37} {'Accuracy':>9} {'Bal. acc.':>10} {'Brier':>9} "
+        f"{'F1':>7} {'AP':>7}"
+    )
+    print("-" * 85)
     for r in results:
         print(
             f"{r['name']:37} {r['accuracy']:9.3f} "
-            f"{r['balanced_accuracy']:10.3f} {r['brier']:9.3f}"
+            f"{r['balanced_accuracy']:10.3f} {r['brier']:9.3f} "
+            f"{r['f1']:7.3f} {r['average_precision']:7.3f}"
         )
-    print("Brier score: lower is better. Accuracy: higher is better.\n")
+    print("Brier score: lower is better. All other metrics: higher is better.")
+    print("F1 uses hard predictions; AP = average precision (binary mAP / PR-AUC).\n")
 
 
 def plot_probability_maps(
@@ -291,7 +290,7 @@ def plot_probability_maps(
 
 
 def plot_metrics(results: list[dict], output_path: Path) -> None:
-    """Compare accuracy and Brier score on the held-out test set."""
+    """Compare accuracy, Brier score, F1 and average precision on the test set."""
 
     short_names = [
         "CART",
@@ -303,7 +302,8 @@ def plot_metrics(results: list[dict], output_path: Path) -> None:
 
     x = np.arange(len(results))
 
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
+    axes = axes.ravel()
 
     axes[0].bar(
         x,
@@ -318,6 +318,14 @@ def plot_metrics(results: list[dict], output_path: Path) -> None:
     )
     axes[1].set_title("Test Brier score (lower is better)")
     axes[1].set_ylim(bottom=0)
+
+    axes[2].bar(x, [r["f1"] for r in results])
+    axes[2].set_title("Test F1 (higher is better)")
+    axes[2].set_ylim(0, 1)
+
+    axes[3].bar(x, [r["average_precision"] for r in results])
+    axes[3].set_title("Test average precision / mAP (higher is better)")
+    axes[3].set_ylim(0, 1)
 
     for ax in axes:
         ax.set_xticks(x)
