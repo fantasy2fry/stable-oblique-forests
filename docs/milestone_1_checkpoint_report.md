@@ -195,14 +195,13 @@ Across the expanded 15-dataset OpenML benchmark, performance highlights include 
 Three figures were generated: Brier loss versus $\rho$ per boundary function,
 selection diagnostics versus $\rho$, and OpenML bar charts.
 
-![Brier Loss vs Correlation Rho](../outputs/exp_correlation_small_penalty/brier_vs_rho.png)
+![Brier Loss vs Correlation Rho](../outputs/exp_correlation/brier_vs_rho.png)
 *Figure 1: Brier loss across boundary functions and feature correlation values ($\rho \in [0.0, 0.5, 0.9]$).*
 The stability curves sit above the unpenalised and L0 models in every panel. The oracle line shows how the effective signal changes with correlation for the oblique and mixed functions.
 
-![Selection Diagnostics vs Correlation Rho](../outputs/exp_correlation_small_penalty/selection_vs_rho.png)
+![Selection Diagnostics vs Correlation Rho](../outputs/exp_correlation/selection_vs_rho.png)
 *Figure 2: Selection diagnostics and tree size across correlation levels. Mean ± standard error over 5 replicates.*
 The stability variants show substantially smaller trees than the unpenalised model. The uniform and shuffled controls closely track the proposed model.
-
 ![OpenML Benchmark Performance](../outputs/plots/openml_benchmark.png)
 *Figure 3: OpenML benchmark evaluation across 15 binary datasets. Outer-fold means, error bars are standard deviations over 5 folds.*
 The expanded benchmark shows densely packed Brier bars for the oblique variants. F1 and mAP scores reveal some threshold artefacts and demonstrate that the size constraints are the primary bottleneck compared to the default Random Forest.
