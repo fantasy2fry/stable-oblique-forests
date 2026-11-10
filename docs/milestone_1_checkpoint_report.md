@@ -80,10 +80,10 @@ When `stability_penalty == 0`, the node-level bootstrap is skipped (line 248), t
 ### 2.4 Independence of $\widehat{\pi}$ from assessment labels, and test status
 
 - **Code inspection (done):** $\widehat{\pi}$, threshold fitting and probability fitting use $A_v$ only. No label from $H_v$ enters $\widehat{\pi}$. No leakage was found. Preprocessing is fitted inside the pipeline on training folds, and outer test folds are never used for tuning.
-- **Unit tests:** the checkpoint suite contains 31 tests and the
-  scikit-learn `check_estimator` suite was reported as passing in the
-  development environment. Forests are identical for `n_jobs=1` and
-  `n_jobs=2`.
+- **Unit tests:** `uv run python -m pytest -q` passed all 32 tests in 13.44
+  seconds. An earlier development run also reported that the scikit-learn
+  `check_estimator` suite passed. Forests were reported identical for
+  `n_jobs=1` and `n_jobs=2`.
 - **Test coverage qualification:** `test_pi_hat_independent_of_assessment_labels`
   verifies the equivalent bootstrap-frequency procedure using a fixed bank.
   A higher-level test that exercises the complete tree-building path would
@@ -192,15 +192,16 @@ Across the expanded 15-dataset OpenML benchmark, performance highlights include 
 
 ### 3.6 Visual Trend Analysis of the Generated Figures
 
-Three figures were generated: predictive metrics and tree size versus $\rho$, Brier loss versus $\rho$ per boundary function, and OpenML bar charts.
+Three figures were generated: Brier loss versus $\rho$ per boundary function,
+selection diagnostics versus $\rho$, and OpenML bar charts.
 
-![Predictive Metrics vs Correlation Rho](../outputs/plots/correlation_metrics.png)
-*Figure 1: Predictive performance (Accuracy, F1, mAP) across feature correlation values ($\rho \in [0.0, 0.5, 0.9]$).* 
-All six curves rise together with $\rho$ and lie almost on top of each other. The bottom-right panel reveals four tiers of tree sizes, demonstrating the aggressive tree-size shrinkage caused by the stability variants.
+![Brier Loss vs Correlation Rho](../outputs/exp_correlation_small_penalty/brier_vs_rho.png)
+*Figure 1: Brier loss across boundary functions and feature correlation values ($\rho \in [0.0, 0.5, 0.9]$).*
+The stability curves sit above the unpenalised and L0 models in every panel. The oracle line shows how the effective signal changes with correlation for the oblique and mixed functions.
 
-![Brier Loss vs Correlation Rho](../outputs/plots/correlation_vs_brier.png)
-*Figure 2: Brier Loss across boundary functions and correlation levels. Mean ± standard error over 5 replicates; the dash-dotted line is the oracle (true-probability) Brier loss.*
-The three stability curves coincide and sit above L0, Obl and RF in every panel, approaching the oracle only at strong signal ($\rho = 0.9$).
+![Selection Diagnostics vs Correlation Rho](../outputs/exp_correlation_small_penalty/selection_vs_rho.png)
+*Figure 2: Selection diagnostics and tree size across correlation levels. Mean ± standard error over 5 replicates.*
+The stability variants show substantially smaller trees than the unpenalised model. The uniform and shuffled controls closely track the proposed model.
 
 ![OpenML Benchmark Performance](../outputs/plots/openml_benchmark.png)
 *Figure 3: OpenML benchmark evaluation across 15 binary datasets. Outer-fold means, error bars are standard deviations over 5 folds.*
@@ -256,10 +257,10 @@ The bootstrapping overhead costs 3–5× over L0 at $B = 10$. Implementing a 25-
 
 ### 4.5 Milestone 1 conclusion
 
-Milestone 1 delivers a working, tested implementation of the proposed
-node-wise stability criterion, its main ablations and a reproducible
-preliminary evaluation on synthetic correlated features and 15 OpenML binary
-classification tasks. The evidence does not support a predictive advantage
+Milestone 1 delivers a working implementation with a test suite for the
+proposed node-wise stability criterion, its main ablations and a substantially
+reproducible preliminary evaluation on synthetic correlated features and 15
+OpenML binary classification tasks. The evidence does not support a predictive advantage
 for the stability penalty under the tested settings. Instead, the penalty
 primarily reduces tree size and worsens raw probability calibration, while
 the uniform and shuffled controls suggest that the feature-specific
@@ -318,7 +319,8 @@ Continue developing the stability term in its current form only if, in the high-
 
 ## Appendix B. Exact Reproduction Commands
 
-- Synthetic pilot: `uv run python experiments/exp_correlation.py`
+- Synthetic pilot, reproducing the reported small-penalty tables:
+  `uv run python experiments/exp_correlation.py --sparsity-penalty 0.001 --stability-penalty 0.002 --include-controls --n-jobs 4 --output-dir outputs/exp_correlation_small_penalty`
 - Expanded real-data benchmark: `uv run python experiments/exp_openml.py --n-jobs 4`
 
 Both experiment scripts write their result tables and figures during the same

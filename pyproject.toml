@@ -17,6 +17,7 @@ dependencies = [
     "matplotlib>=3.10.9",
     "pandas>=2.3.3",
     "seaborn>=0.13.2",
+    "pytest>=9.2.0",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
