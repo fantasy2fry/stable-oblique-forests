@@ -41,15 +41,12 @@ uv run python experiments/exp_openml.py --n-jobs 4
 
 Datasets may be fetched from OpenML on first use, so network access can be required.
 
-## 4. Visualizations
+Both experiment scripts write their tables and figures during the same run. No
+separate plotting command is required. The correlation experiment writes
+`brier_vs_rho.png` and `selection_vs_rho.png`; the OpenML benchmark writes
+`plots/openml_benchmark.png`.
 
-```bash
-uv run python experiments/generate_plots.py
-```
-
-Run this after the experiments above, so the plotting script has results to read.
-
-## 5. Visual demo
+## 4. Visual demo
 
 ```bash
 uv run python examples/visual_demo.py
