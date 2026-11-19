@@ -243,6 +243,57 @@ def main() -> None:
 
     print(f"\nSaved: {args.output_dir.resolve()}")
 
+    # 7. Mean paired effects with bootstrap confidence intervals.
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+
+    effects = table["mean_delta_brier"].to_numpy()
+    lower = table["mean_ci_low"].to_numpy()
+    upper = table["mean_ci_high"].to_numpy()
+
+    xerr = np.vstack([
+        effects - lower,
+        upper - effects,
+    ])
+
+    y_positions = np.arange(len(table))
+
+    ax.errorbar(
+        effects,
+        y_positions,
+        xerr=xerr,
+        fmt="o",
+        capsize=4,
+    )
+
+    ax.axvline(
+        0.0,
+        color="black",
+        linestyle="--",
+        linewidth=1,
+    )
+
+    ax.set_yticks(
+        y_positions,
+        ["vs L0", "vs Uniform", "vs Shuffled"],
+    )
+
+    ax.set_xlabel(
+        "Mean paired Brier difference "
+        "(negative favors Stability)"
+    )
+    ax.set_title(
+        "Mean effects with 95% bootstrap confidence intervals"
+    )
+    ax.grid(axis="x", alpha=0.25)
+
+    fig.tight_layout()
+    fig.savefig(
+        args.output_dir / "paired_effects_ci.png",
+        dpi=250,
+    )
+    plt.close(fig)
+
+
 
 if __name__ == "__main__":
     main()
