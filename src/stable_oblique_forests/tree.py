@@ -290,6 +290,11 @@ class ObliqueTreeClassifier(ClassifierMixin, BaseEstimator):
         construction_right = X[A] @ best.direction > best.threshold
         assessment_right = X[H] @ best.direction > best.threshold
         left_A, right_A = A[~construction_right], A[construction_right]
+
+        if min(len(left_A), len(right_A)) < self.min_samples_leaf:
+            raise RuntimeError(
+                "Selected split violates min_samples_leaf."
+            )
         left_H, right_H = H[~assessment_right], H[assessment_right]
         node.direction = best.direction.copy()
         node.threshold = best.threshold

@@ -15,7 +15,7 @@ def test_threshold_finds_separable_problem():
     idx = np.arange(6)
     c = optimize_threshold(X, y, idx, np.array([1.]), min_samples_leaf=2)
     assert c is not None
-    assert -1 < c.threshold < 1
+    assert -1 <= c.threshold < 1
     assert c.n_left == 3 and c.n_right == 3
     assert c.left_probability == 1 / 5
     assert c.right_probability == 4 / 5
@@ -122,3 +122,31 @@ def test_pi_hat_independent_of_assessment_labels():
         y_const[assessment_idx] = value
         np.testing.assert_array_equal(
             pi_ref, _estimate_pi_hat(X, y_const, construction_idx, **kw))
+
+
+
+def test_threshold_matches_actual_partition():
+    a = np.nextafter(1.0, np.inf)
+    b = np.nextafter(a, np.inf)
+
+    X = np.array([[a], [a], [b], [b]])
+    y = np.array([0, 0, 1, 1])
+
+    candidate = optimize_threshold(
+        X,
+        y,
+        indices=np.arange(4),
+        direction=np.array([1.0]),
+        min_samples_leaf=2,
+    )
+
+    assert candidate is not None
+
+    projected = X @ candidate.direction
+    actual_left = np.sum(projected <= candidate.threshold)
+    actual_right = np.sum(projected > candidate.threshold)
+
+    assert actual_left == candidate.n_left
+    assert actual_right == candidate.n_right
+    assert actual_left >= 2
+    assert actual_right >= 2

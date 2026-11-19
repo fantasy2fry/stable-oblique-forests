@@ -37,6 +37,13 @@ from stable_oblique_forests import ObliqueRandomForestClassifier, binary_classif
 # These are small settings for a quick demonstration, not tuned values.
 SEED = 42
 
+def w_probability(X: np.ndarray) -> np.ndarray:
+    """True class-one probability for a W-shaped boundary."""
+    x1 = X[:, 0]
+    x2 = X[:, 1]
+
+    boundary = np.abs(np.abs(x1) - 1.0) - 0.5
+    return expit(10.0 * (x2 - boundary))
 
 def create_dataset(name: str, n_samples: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
     """Return two numerical features and binary labels.
@@ -66,6 +73,25 @@ def create_dataset(name: str, n_samples: int, seed: int) -> tuple[np.ndarray, np
         true_p = expit(5.0 * margin)
         y = rng.binomial(1, true_p).astype(int)
         return X, y
+
+    if name == "w":
+        rng = np.random.default_rng(seed)
+
+        x1 = rng.uniform(-2.0, 2.0, size=n_samples)
+        boundary = np.abs(np.abs(x1) - 1.0) - 0.5
+        x2 = boundary + rng.normal(
+            loc=0.0,
+            scale=0.35,
+            size=n_samples,
+        )
+
+        X = np.column_stack([x1, x2])
+
+        true_p = w_probability(X)
+        y = rng.binomial(1, true_p).astype(int)
+
+        return X, y
+
     raise ValueError(f"Unknown dataset: {name!r}")
 
 
@@ -248,6 +274,9 @@ def plot_probability_maps(
         margin = (mesh[:, 0] + mesh[:, 1]) / np.sqrt(2)
         true_proba = expit(3.5 * margin).reshape(xx.shape)
 
+    elif dataset == "w":
+        true_proba = w_probability(mesh).reshape(xx.shape)
+
     else:
         true_proba = None
 
@@ -391,7 +420,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--dataset",
-        choices=("mixed", "diagonal", "moons"),
+        choices=("mixed", "diagonal", "moons", "w"),
         default="mixed",
         help="Synthetic 2D dataset.",
     )
