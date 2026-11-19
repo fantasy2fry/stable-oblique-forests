@@ -81,9 +81,11 @@ MODEL_ORDER = [
     "Random forest",
     "Oblique",
     "Oblique + L0",
+    "Oblique + stability",
     "Oblique + L0 + stability",
     "Oblique + L0 + uniform stability",
     "Oblique + L0 + shuffled stability",
+    "Oblique + training selection",
 ]
 METRICS = ["brier", "accuracy", "f1", "average_precision", "balanced_accuracy"]
 DIAGNOSTICS = [
@@ -138,11 +140,15 @@ def build_models(args, seed):
         ),
         "Oblique": ablations["unpenalized"],
         "Oblique + L0": ablations["sparsity_only"],
+        "Oblique + stability": ablations["stability_only"],
         "Oblique + L0 + stability": ablations["sparsity_and_stability"],
     }
     if args.include_controls:
         models["Oblique + L0 + uniform stability"] = ablations["uniform_stability_control"]
         models["Oblique + L0 + shuffled stability"] = ablations["shuffled_stability_control"]
+        models["Oblique + training selection"] = (
+            ablations["training_selection_control"]
+        )
     return models
 
 
@@ -258,9 +264,11 @@ MODEL_COLORS = {
     "Random forest": "tab:red",
     "Oblique": "tab:blue",
     "Oblique + L0": "tab:orange",
+    "Oblique + stability": "tab:cyan",
     "Oblique + L0 + stability": "tab:green",
     "Oblique + L0 + uniform stability": "tab:purple",
     "Oblique + L0 + shuffled stability": "tab:brown",
+    "Oblique + training selection": "tab:gray",
 }
 
 def make_plots(summary, raw_rows, out_dir, dpi=300):
@@ -342,10 +350,7 @@ def make_plots(summary, raw_rows, out_dir, dpi=300):
 
     fig, axes = plt.subplots(2, 2, figsize=(13, 9))
 
-    colors = {
-        model: plt.get_cmap("tab10")(MODEL_ORDER.index(model) % 10)
-        for model in models
-    }
+    colors = MODEL_COLORS
 
     for ax, (metric, title) in zip(axes.ravel(), metric_panels):
         for model in models:
