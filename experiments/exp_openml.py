@@ -113,6 +113,13 @@ DATASETS = {
 QUICK_DATASETS = ("breast-w", "haberman", "ionosphere")
 
 METRICS = ("brier", "accuracy", "f1", "average_precision")
+
+STRUCTURE_METRICS = (
+    "nodes_per_tree",
+    "mean_support_size",
+    "n_used_features",
+)
+
 SCORING = {
     "brier": "neg_brier_score",
     "accuracy": "accuracy",
@@ -267,6 +274,54 @@ def with_preprocessing(classifier):
 
 
 # ------------------------------------------------------------------------ evaluation
+def forest_complexity(pipeline):
+    """Structural diagnostics of a fitted sklearn Pipeline."""
+    clf = pipeline.named_steps["clf"]
+
+    if hasattr(clf, "node_count_"):
+        # Our oblique forest.
+        supports = [
+            len(d["support"])
+            for tree in clf.estimators_
+            for d in tree.node_diagnostics_
+        ]
+
+        return {
+            "nodes_per_tree": (
+                clf.node_count_ / len(clf.estimators_)
+            ),
+            "mean_support_size": (
+                float(np.mean(supports))
+                if supports else float("nan")
+            ),
+            "n_used_features": int(
+                np.count_nonzero(clf.feature_usage_)
+            ),
+        }
+
+    # sklearn RandomForestClassifier.
+    trees = clf.estimators_
+
+    used_features = set()
+    n_splits = 0
+
+    for tree in trees:
+        split_features = tree.tree_.feature[
+            tree.tree_.feature >= 0
+        ]
+        used_features.update(split_features.tolist())
+        n_splits += len(split_features)
+
+    return {
+        "nodes_per_tree": float(np.mean([
+            tree.tree_.node_count for tree in trees
+        ])),
+        "mean_support_size": (
+            1.0 if n_splits > 0 else float("nan")
+        ),
+        "n_used_features": len(used_features),
+    }
+
 def run_fold(key, ds_seed, repeat, fold, X, y, train, test, args):
     """Tune and evaluate all models on one outer fold."""
 
@@ -407,6 +462,8 @@ def run_fold(key, ds_seed, repeat, fold, X, y, train, test, args):
             )
         )
 
+        row.update(forest_complexity(model))
+
         if name in tuned_params:
             params = tuned_params[name]
 
@@ -481,6 +538,23 @@ def summarize(rows, info):
         rec = dict(dataset=dataset, **info[dataset], model=model, n_folds=len(items))
         for m in METRICS:
             rec[f"{m}_mean"], rec[f"{m}_std"] = mean_std(items, m)
+
+        for m in STRUCTURE_METRICS:
+            values = np.array(
+                [float(item[m]) for item in items],
+                dtype=float,
+            )
+            values = values[np.isfinite(values)]
+
+            rec[f"{m}_mean"] = (
+                float(values.mean())
+                if len(values) else float("nan")
+            )
+            rec[f"{m}_std"] = (
+                float(values.std(ddof=1))
+                if len(values) > 1 else float("nan")
+            )
+
         rec["fit_seconds_mean"], _ = mean_std(items, "fit_seconds")
         rec["search_seconds_mean"], _ = mean_std(items, "search_seconds")
         rec.update(tuned_lambda_zero_folds="", tuned_lambda_median="", tuned_gamma_zero_folds="",
