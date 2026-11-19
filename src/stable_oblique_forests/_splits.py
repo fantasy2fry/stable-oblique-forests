@@ -111,7 +111,7 @@ def optimize_threshold(
     best = int(np.argmin(squared_error))
     cut = int(cuts[best])
     # This midpoint is robust to overflow in the sum of two large endpoints.
-    threshold = float(zs[cut - 1] + 0.5 * (zs[cut] - zs[cut - 1]))
+    threshold = float(zs[cut - 1])
     return Candidate(
         direction=direction,
         threshold=threshold,
