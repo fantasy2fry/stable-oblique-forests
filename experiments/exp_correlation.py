@@ -63,6 +63,9 @@ def f_axis(X):
 def f_oblique(X):
     return (X[:, 0] + X[:, 1] + X[:, 2]) / np.sqrt(3.0)
 
+def f_oblique2(X):
+    return (X[:, 0] + X[:, 1]) / np.sqrt(2.0)
+
 
 def f_mixed(X):
     return np.where(X[:, 0] <= 0, X[:, 1], (X[:, 1] + X[:, 2] + X[:, 3]) / np.sqrt(3.0))
@@ -72,10 +75,23 @@ def sigmoid(z):
     """Numerically stable logistic function (plain NumPy so worker processes can pickle it)."""
     return 0.5 * (1.0 + np.tanh(0.5 * z))
 
+def rho_seed(rho: float) -> int:
+    """Stable seed component for correlations specified to 6 decimals."""
+    return int(round(rho * 1_000_000))
 
-FUNCTIONS = {"axis": f_axis, "oblique": f_oblique, "mixed": f_mixed}
-# Columns that actually enter f (0-based).
-RELEVANT = {"axis": (0,), "oblique": (0, 1, 2), "mixed": (0, 1, 2, 3)}
+FUNCTIONS = {
+    "axis": f_axis,
+    "oblique": f_oblique,
+    "oblique2": f_oblique2,
+    "mixed": f_mixed,
+}
+
+RELEVANT = {
+    "axis": (0,),
+    "oblique": (0, 1, 2),
+    "oblique2": (0, 1),
+    "mixed": (0, 1, 2, 3),
+}
 
 MODEL_ORDER = [
     "Random forest",
@@ -87,6 +103,17 @@ MODEL_ORDER = [
     "Oblique + L0 + shuffled stability",
     "Oblique + training selection",
 ]
+
+# Models displayed in the main figures.
+# Control variants remain in the experiment results.
+PLOT_MODELS = [
+    "Random forest",
+    "Oblique",
+    "Oblique + L0",
+    "Oblique + stability",
+    "Oblique + L0 + stability",
+]
+
 METRICS = ["brier", "accuracy", "f1", "average_precision", "balanced_accuracy"]
 DIAGNOSTICS = [
     "oracle_brier", "nodes_per_tree", "mean_support_size", "relevant_fraction",
@@ -106,14 +133,30 @@ def draw_features(rng, n, n_features, rho):
 def make_dataset(rho, function, replicate, rho_index, args):
     """Train/test data. X and the label uniforms depend only on (seed, rho, replicate),
     so all functions and all models see paired data (common random numbers)."""
-    rng = np.random.default_rng([args.seed, rho_index, replicate])
+    rng = np.random.default_rng(
+        [args.seed, rho_seed(rho), replicate]
+    )
     X_train = draw_features(rng, args.n_train, args.n_features, rho)
     u_train = rng.random(args.n_train)
     X_test = draw_features(rng, args.n_test, args.n_features, rho)
     u_test = rng.random(args.n_test)
+
     f = FUNCTIONS[function]
-    p_train = sigmoid(args.signal * f(X_train))
-    p_test = sigmoid(args.signal * f(X_test))
+    # f_oblique2 already divides by sqrt(2).
+    # The extra factor keeps its variance equal to 1.
+    signal_scale = (
+        np.sqrt(1.0 + rho)
+        if function == "oblique2"
+        else 1.0
+    )
+
+    p_train = sigmoid(
+        args.signal * f(X_train) / signal_scale
+    )
+    p_test = sigmoid(
+        args.signal * f(X_test) / signal_scale
+    )
+
     y_train = (u_train < p_train).astype(int)
     y_test = (u_test < p_test).astype(int)
     return X_train, y_train, X_test, y_test, p_test
@@ -195,7 +238,11 @@ def run_job(job, args):
     oracle = binary_classification_metrics(
         y_te, (p_te > 0.5).astype(int), p_te
     )["brier"]
-    model_seed = int(np.random.default_rng([args.seed, rho_index, replicate, 1]).integers(2**31 - 1))
+    model_seed = int(
+        np.random.default_rng(
+            [args.seed, rho_seed(rho), replicate, 1]
+        ).integers(2 ** 31 - 1)
+    )
     rows = []
     for name, model in build_models(args, model_seed).items():
         start = time.perf_counter()
@@ -272,7 +319,10 @@ MODEL_COLORS = {
 }
 
 def make_plots(summary, raw_rows, out_dir, dpi=300):
-    models = [m for m in MODEL_ORDER if any(r["model"] == m for r in summary)]
+    models = [
+        m for m in PLOT_MODELS
+        if any(r["model"] == m for r in summary)
+    ]
     rhos = sorted({r["rho"] for r in summary})
     functions = [f for f in FUNCTIONS if any(r["function"] == f for r in summary)]
 
@@ -308,7 +358,7 @@ def make_plots(summary, raw_rows, out_dir, dpi=300):
     fig.suptitle("Brier loss vs feature correlation (mean ± s.e. over replicates)")
     fig.tight_layout()
     path = out_dir / "brier_vs_rho.png"
-    fig.savefig(path, dpi=160)
+    fig.savefig(path, dpi=dpi)
     plt.close(fig)
     paths.append(path)
 
@@ -337,6 +387,7 @@ def make_plots(summary, raw_rows, out_dir, dpi=300):
     path = out_dir / "selection_vs_rho.png"
     fig.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
+    paths.append(path)
 
 
     # Additional metrics, averaged over boundary functions
@@ -510,7 +561,7 @@ def main():
                               numpy=np.__version__, scipy=scipy.__version__,
                               scikit_learn=sklearn.__version__)
     (args.output_dir / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
-    print(f"{len(jobs)} datasets x {len(MODEL_ORDER) if args.include_controls else 4} models; "
+    print(f"{len(jobs)} datasets x {len(MODEL_ORDER) if args.include_controls else 5} models; "
           f"n={args.n_train}, test={args.n_test}, p={args.n_features}, "
           f"trees={args.n_estimators}, lambda={args.sparsity_penalty}, "
           f"gamma={args.stability_penalty}", flush=True)

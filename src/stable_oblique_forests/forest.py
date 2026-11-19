@@ -50,7 +50,7 @@ class ObliqueRandomForestClassifier(ClassifierMixin, BaseEstimator):
     def __init__(
         self,
         n_estimators=100,
-        support_sizes=(1, 2, 4, 8),
+        support_sizes=(1, 2, 3, 4, 8),
         n_directions_per_k=8,
         sparsity_penalty=0.0,
         stability_penalty=0.0,
