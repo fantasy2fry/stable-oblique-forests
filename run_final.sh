@@ -154,7 +154,7 @@ section "4. Visual demos"
 
 # Current visual_demo.py has no --n-jobs parameter.
 # If you add it, this runner will automatically use 12.
-DEMO_JOBS_ARGS=()
+${DEMO_JOBS_ARGS[@]+"${DEMO_JOBS_ARGS[@]}"} \
 
 if uv run python examples/visual_demo.py --help | grep -q -- '--n-jobs'; then
     DEMO_JOBS_ARGS=(--n-jobs "$JOBS")
