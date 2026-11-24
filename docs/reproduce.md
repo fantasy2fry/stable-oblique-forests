@@ -2,6 +2,20 @@
 
 Commands for reproducing the experiments, figures and demo. Run everything from the repository root.
 
+## 0. Final results (as reported)
+
+All results in the final report (`report/report_final.pdf`) come from one script:
+
+```bash
+bash run_final.sh
+```
+
+It runs the test suite, the synthetic correlation experiment (with controls), the regularization paths, the paired statistical analysis, the OpenML benchmark and the visual demos, and writes everything to `outputs/final/`. Run it with Bash 4 or newer: on Bash 3.2 (the macOS default) the script can fail on an empty array under `set -u`.
+
+The tables and figures of the report are rebuilt from `outputs/final/` with the scripts in `report_build/` (they only read CSV files and do not fit models).
+
+The sections below list individual commands for separate or exploratory runs. Their settings (e.g. penalty values and output folders) are not necessarily those used in the final report.
+
 ## 1. Setup
 
 ```bash
@@ -14,7 +28,7 @@ Alternative, in an existing environment:
 uv pip install -e ".[dev,experiments]"
 ```
 
-Optionally verify the installation (expected: `31 passed`):
+Optionally verify the installation (expected: `33 passed`):
 
 ```bash
 uv run python -m pytest -q
