@@ -15,3 +15,9 @@ data/
 
 .idea/
 *_tmp
+# Report and slides: only the final PDFs are versioned (LaTeX sources live in Overleaf)
+report/*
+!report/*.pdf
+# Report helper scripts: keep the .py files, ignore generated tables, PDFs and notes
+report_build/tables/
+report_build/*.pdf
