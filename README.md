@@ -28,7 +28,7 @@ A plain `pip` installation of the core package also works:
 python -m pip install -e .
 ```
 
-To run the tests (currently `31 passed`):
+To run the tests (currently `33 passed`):
 
 ```bash
 uv run python -m pytest -q
@@ -103,7 +103,7 @@ All custom variants share the same tree code and candidate-generation procedure.
 
 ## Split construction
 
-At node `v`, choose a finite bank of random sparse directions with support sizes `support_sizes` (default `(1, 2, 4, 8)`). Coefficients are independently sampled as `+1/sqrt(k)` or `-1/sqrt(k)` on `k` features. Thresholds minimize smoothed construction-sample Brier loss subject to a minimum child size.
+At node `v`, choose a finite bank of random sparse directions with support sizes `support_sizes` (default `(1, 2, 3, 4, 8)`). Coefficients are independently sampled as `+1/sqrt(k)` or `-1/sqrt(k)` on `k` features. Thresholds minimize smoothed construction-sample Brier loss subject to a minimum child size.
 
 The project investigates the split score
 
@@ -189,11 +189,17 @@ src/stable_oblique_forests/
   forest.py        Ensemble training and predictions
   models.py        Baseline and ablation configurations
 tests/             Unit, integration, compatibility and reproducibility tests
-experiments/       Experiment scripts (exp_correlation.py, exp_openml.py, generate_plots.py)
+experiments/       Experiment scripts (exp_correlation.py, exp_regularization.py, exp_statistical_analysis.py, exp_openml.py)
 examples/          API usage and visual demo examples (e.g. visual_demo.py)
+report/            Final report and presentation (PDF)
+report_build/      Scripts that build report tables/figures from saved results
 docs/              Method mapping, implementation notes and reproduction guide
 ```
 
 ## Experiments
 
-The scripts in `experiments/` cover the synthetic correlation experiment (`exp_correlation.py`), the OpenML benchmark (`exp_openml.py`), and plot generation (`generate_plots.py`). They require the `experiments` extra (see [Installation](#installation)). Exact commands are listed in [`docs/reproduce.md`](docs/reproduce.md).
+The scripts in `experiments/` cover the synthetic correlation experiment (`exp_correlation.py`), regularization paths (`exp_regularization.py`), paired statistical tests (`exp_statistical_analysis.py`) and the OpenML benchmark (`exp_openml.py`). The full final run is reproduced with `bash run_final.sh` (results go to `outputs/final/`). They require the `experiments` extra (see [Installation](#installation)). Exact commands are listed in [`docs/reproduce.md`](docs/reproduce.md).
+
+## Report
+
+The final report and slides are in `report/` (`report_final.pdf`, `presentation.pdf`). The scripts in `report_build/` regenerate the report tables and figures from the CSV files in `outputs/final/` (they do not fit any models).
