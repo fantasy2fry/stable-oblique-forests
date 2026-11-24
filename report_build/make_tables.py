@@ -8,7 +8,7 @@ Pipeline (run from the repository root, a few seconds in total):
 
     python report_build/make_tables.py    # tables + key numbers   -> report_build/tables
     python report_build/make_figures.py   # summary figures (PDF)   -> report/figures
-    python report_build/sync_tables.py    # paste tables into report/report_final.tex
+    python report_build/make_slide_figures.py  # slide figures      -> report/figures
 
 Use the project environment, e.g. ``.venv/Scripts/python.exe`` (Windows) or
 ``.venv/bin/python`` (macOS/Linux), or ``uv run python``.
